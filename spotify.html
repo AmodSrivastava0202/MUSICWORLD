@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spotify</title>
+    <link rel="stylesheet" href="spotify.css">
+</head>
+<body>
+    <div class="spotify-container">
+ 
+        <aside class="sidebar">
+            <h2 class="logo">Spotify</h2>
+            <img src="spotify.jpg" alt="spotify logo">
+            <nav class="sidebar-nav">
+                <a href="#" id="navHome">Home</a>
+                <a href="#" id="navSearch">Search</a>
+                <a href="#" id="navLibrary">Your Library</a>
+                <a href="#" id="navCreate"><span class="plus">+</span> Create Playlist</a>
+                <a href="#" id="navLiked"><span class="heart">&#9829;</span> Liked Songs</a>
+            </nav>
+            <!-- your playlists appear here automatically -->
+            <div class="side-lists" id="sideLists"></div>
+        </aside>
+ 
+        <main class="main">
+            <input type="search" id="search" class="search" placeholder="Search any song or artist and press Enter">
+ 
+            <!-- HOME VIEW -->
+            <div id="homeView">
+                <h1>Welcome to musicworld</h1>
+ 
+                <div class="cards">
+                    <a href="thriller.html" class="card">
+                        <img src="thriller.jpg" alt="Thriller Album Cover">
+                        <h3>THRILLER</h3>
+                        <p>KING OF POP- Michael Jackson</p>
+                    </a>
+ 
+                </div>
+ 
+                <section class="library" id="librarySection">
+                    <h2>Your Library</h2>
+                    <p>Liked songs and the playlists you create. Click + to make a new one.</p>
+                    <!-- filled automatically -->
+                    <div class="cards" id="libraryCards"></div>
+                </section>
+ 
+                <section class="charts">
+                    <h2 id="chartsTitle">Top Charts</h2>
+                    <p>Discover the most popular tracks and albums from around the world.</p>
+                    <!-- filled automatically -->
+                    <ol class="tracklist" id="songList"></ol>
+                </section>
+            </div>
+ 
+            <!-- PLAYLIST / LIKED SONGS VIEW -->
+            <div id="playlistView" hidden>
+                <button class="text-btn" id="backBtn">&larr; Back</button>
+                <div class="view-header">
+                    <div>
+                        <p class="small-label">PLAYLIST</p>
+                        <h1 id="viewTitle"></h1>
+                        <p id="viewCount" class="muted"></p>
+                    </div>
+                    <button class="danger-btn" id="deleteBtn">Delete playlist</button>
+                </div>
+                <ol class="tracklist" id="viewList"></ol>
+            </div>
+        </main>
+ 
+        <footer class="player">
+            <div class="now-playing">
+                <strong>BILLIE JEAN</strong>
+                <span>MICHAEL JACKSON</span>
+            </div>
+            <audio controls src="BILLIE JEAN.mp3"></audio>
+        </footer>
+ 
+    </div>
+ 
+    <!-- Create playlist popup -->
+    <div class="modal-bg" id="modal" hidden>
+        <div class="modal">
+            <h3>Create playlist</h3>
+            <input type="text" id="playlistName" maxlength="40" placeholder="Playlist name">
+            <div class="modal-buttons">
+                <button class="text-btn" id="cancelBtn">Cancel</button>
+                <button class="green-btn" id="createBtn">Create</button>
+            </div>
+        </div>
+    </div>
+ 
+    <div class="toast" id="toast" hidden></div>
+ 
+    <script>
+        /* ---------- saved data (stays in your browser) ---------- */
+        const KEY = "musicworld-data";
+        let store = loadStore();        // { liked: [songs], playlists: [{id, name, songs}] }
+        let currentView = "home";       // "home", "liked", or a playlist id
+        let pendingSong = null;         // song waiting to go into a brand new playlist
+ 
+        function loadStore() {
+            try {
+                const saved = JSON.parse(localStorage.getItem(KEY));
+                if (saved) {
+                    return { liked: saved.liked || [], playlists: saved.playlists || [] };
+                }
+            } catch (e) { }
+            return { liked: [], playlists: [] };
+        }
+ 
+        function saveStore() {
+            try { localStorage.setItem(KEY, JSON.stringify(store)); } catch (e) { }
+        }
+ 
+        const $ = function (id) { return document.getElementById(id); };
+ 
+        /* ---------- songs from iTunes ---------- */
+        function toSong(item) {
+            return {
+                id: String(item.trackId),
+                title: item.trackName,
+                artist: item.artistName,
+                preview: item.previewUrl,
+                art: item.artworkUrl100 || ""
+            };
+        }
+ 
+        async function loadSongs(term) {
+            const list = $("songList");
+            list.innerHTML = "<li class='song'>Loading...</li>";
+            try {
+                const url = "https://itunes.apple.com/search?media=music&entity=song&limit=10&term="
+                            + encodeURIComponent(term);
+                const response = await fetch(url);
+                const data = await response.json();
+ 
+                list.innerHTML = "";
+                const results = data.results.filter(function (r) { return r.previewUrl; });
+ 
+                if (results.length === 0) {
+                    list.innerHTML = "<li class='song'>No songs found. Try another name.</li>";
+                    return;
+                }
+                results.forEach(function (item) {
+                    list.appendChild(makeSongRow(toSong(item), null));
+                });
+                updateHearts();
+            } catch (error) {
+                list.innerHTML = "<li class='song'>Could not load songs. Check your internet.</li>";
+                console.error(error);
+            }
+        }
+ 
+        /* ---------- one song row ---------- */
+        function makeSongRow(song, playlistId) {
+            const li = document.createElement("li");
+            li.className = "song";
+ 
+            const title = document.createElement("span");
+            title.className = "song-title";
+            title.textContent = song.title;
+ 
+            const artist = document.createElement("small");
+            artist.textContent = song.artist;
+ 
+            const actions = document.createElement("div");
+            actions.className = "actions";
+ 
+            const like = document.createElement("button");
+            like.className = "icon-btn like-btn";
+            like.dataset.id = song.id;
+            like.title = "Like";
+            like.addEventListener("click", function () { toggleLike(song); });
+ 
+            const add = document.createElement("button");
+            add.className = "icon-btn";
+            add.textContent = "+";
+            add.title = "Add to playlist";
+            add.addEventListener("click", function (e) {
+                e.stopPropagation();
+                showMenu(add, song);
+            });
+ 
+            actions.appendChild(like);
+            actions.appendChild(add);
+ 
+            if (playlistId) {
+                const remove = document.createElement("button");
+                remove.className = "icon-btn";
+                remove.textContent = "\u2715";
+                remove.title = "Remove from this playlist";
+                remove.addEventListener("click", function () {
+                    removeFromPlaylist(playlistId, song.id);
+                });
+                actions.appendChild(remove);
+            }
+ 
+            const audio = document.createElement("audio");
+            audio.controls = true;
+            audio.preload = "none";
+            audio.src = song.preview;
+ 
+            li.appendChild(title);
+            li.appendChild(artist);
+            li.appendChild(actions);
+            li.appendChild(audio);
+            return li;
+        }
+ 
+        /* ---------- likes ---------- */
+        function isLiked(id) {
+            return store.liked.some(function (s) { return s.id === id; });
+        }
+ 
+        function toggleLike(song) {
+            if (isLiked(song.id)) {
+                store.liked = store.liked.filter(function (s) { return s.id !== song.id; });
+                toast("Removed from Liked Songs");
+            } else {
+                store.liked.unshift(song);
+                toast("Added to Liked Songs");
+            }
+            saveStore();
+            updateHearts();
+            renderLibrary();
+            if (currentView === "liked") { renderView(); }
+        }
+ 
+        function updateHearts() {
+            document.querySelectorAll(".like-btn").forEach(function (btn) {
+                const liked = isLiked(btn.dataset.id);
+                btn.textContent = liked ? "\u2665" : "\u2661";
+                btn.classList.toggle("on", liked);
+            });
+        }
+ 
+        /* ---------- playlists ---------- */
+        function findPlaylist(id) {
+            return store.playlists.find(function (p) { return p.id === id; });
+        }
+ 
+        function createPlaylist(name) {
+            const playlist = { id: "p" + Date.now(), name: name, songs: [] };
+            store.playlists.push(playlist);
+            saveStore();
+            renderLibrary();
+            renderSidebar();
+            return playlist;
+        }
+ 
+        function addToPlaylist(playlistId, song) {
+            const playlist = findPlaylist(playlistId);
+            if (!playlist) { return; }
+            if (playlist.songs.some(function (s) { return s.id === song.id; })) {
+                toast("Already in " + playlist.name);
+                return;
+            }
+            playlist.songs.push(song);
+            saveStore();
+            renderLibrary();
+            toast("Added to " + playlist.name);
+        }
+ 
+        function removeFromPlaylist(playlistId, songId) {
+            const playlist = findPlaylist(playlistId);
+            if (!playlist) { return; }
+            playlist.songs = playlist.songs.filter(function (s) { return s.id !== songId; });
+            saveStore();
+            renderLibrary();
+            renderView();
+        }
+ 
+        function deletePlaylist(playlistId) {
+            const playlist = findPlaylist(playlistId);
+            if (!playlist) { return; }
+            if (!confirm("Delete the playlist \"" + playlist.name + "\"?")) { return; }
+            store.playlists = store.playlists.filter(function (p) { return p.id !== playlistId; });
+            saveStore();
+            renderSidebar();
+            renderLibrary();
+            goHome();
+        }
+ 
+        /* ---------- library cards on the home page ---------- */
+        function makeLibraryCard(icon, name, songs, onClick, extraClass) {
+            const card = document.createElement("div");
+            card.className = "card lib-card " + (extraClass || "");
+ 
+            const cover = document.createElement("div");
+            cover.className = "cover";
+            if (songs && songs.length > 0 && songs[0].art) {
+                const img = document.createElement("img");
+                img.src = songs[0].art;
+                img.alt = "";
+                cover.appendChild(img);
+            } else {
+                cover.textContent = icon;
+            }
+ 
+            const h3 = document.createElement("h3");
+            h3.textContent = name;
+ 
+            card.appendChild(cover);
+            card.appendChild(h3);
+ 
+            if (songs) {
+                const p = document.createElement("p");
+                p.textContent = songs.length + (songs.length === 1 ? " song" : " songs");
+                card.appendChild(p);
+            }
+            card.addEventListener("click", onClick);
+            return card;
+        }
+ 
+        function renderLibrary() {
+            const box = $("libraryCards");
+            box.innerHTML = "";
+ 
+            box.appendChild(makeLibraryCard("\u2665", "Liked Songs", store.liked,
+                function () { openView("liked"); }, "liked-card"));
+ 
+            store.playlists.forEach(function (playlist) {
+                box.appendChild(makeLibraryCard("\u266A", playlist.name, playlist.songs,
+                    function () { openView(playlist.id); }));
+            });
+ 
+            box.appendChild(makeLibraryCard("+", "New playlist", null,
+                function () { openModal(null); }, "plus-card"));
+        }
+ 
+        function renderSidebar() {
+            const box = $("sideLists");
+            box.innerHTML = "";
+            store.playlists.forEach(function (playlist) {
+                const a = document.createElement("a");
+                a.href = "#";
+                a.textContent = playlist.name;
+                a.addEventListener("click", function (e) {
+                    e.preventDefault();
+                    openView(playlist.id);
+                });
+                box.appendChild(a);
+            });
+        }
+ 
+        /* ---------- switching between home and a playlist ---------- */
+        function goHome() {
+            currentView = "home";
+            renderView();
+        }
+ 
+        function openView(id) {
+            currentView = id;
+            renderView();
+            $("playlistView").scrollIntoView();
+        }
+ 
+        function renderView() {
+            const home = $("homeView");
+            const view = $("playlistView");
+ 
+            if (currentView === "home") {
+                home.hidden = false;
+                view.hidden = true;
+                return;
+            }
+ 
+            let name, songs, playlistId = null;
+            if (currentView === "liked") {
+                name = "Liked Songs";
+                songs = store.liked;
+            } else {
+                const playlist = findPlaylist(currentView);
+                if (!playlist) { goHome(); return; }
+                name = playlist.name;
+                songs = playlist.songs;
+                playlistId = playlist.id;
+            }
+ 
+            home.hidden = true;
+            view.hidden = false;
+            $("viewTitle").textContent = name;
+            $("viewCount").textContent = songs.length + (songs.length === 1 ? " song" : " songs");
+            $("deleteBtn").hidden = (playlistId === null);
+ 
+            const list = $("viewList");
+            list.innerHTML = "";
+            if (songs.length === 0) {
+                list.innerHTML = "<li class='song'>Nothing here yet. Use the heart or + on any song.</li>";
+            }
+            songs.forEach(function (song) {
+                list.appendChild(makeSongRow(song, playlistId));
+            });
+            updateHearts();
+        }
+ 
+        /* ---------- "add to playlist" popup menu ---------- */
+        function closeMenu() {
+            const old = document.querySelector(".menu");
+            if (old) { old.remove(); }
+        }
+ 
+        function showMenu(button, song) {
+            closeMenu();
+            const menu = document.createElement("div");
+            menu.className = "menu";
+ 
+            const heading = document.createElement("div");
+            heading.className = "menu-title";
+            heading.textContent = "Add to playlist";
+            menu.appendChild(heading);
+ 
+            store.playlists.forEach(function (playlist) {
+                const item = document.createElement("button");
+                item.textContent = playlist.name;
+                item.addEventListener("click", function () {
+                    addToPlaylist(playlist.id, song);
+                    closeMenu();
+                });
+                menu.appendChild(item);
+            });
+ 
+            const create = document.createElement("button");
+            create.className = "menu-new";
+            create.textContent = "+ New playlist";
+            create.addEventListener("click", function () {
+                closeMenu();
+                openModal(song);
+            });
+            menu.appendChild(create);
+ 
+            document.body.appendChild(menu);
+ 
+            const rect = button.getBoundingClientRect();
+            let top = rect.bottom + 6;
+            if (top + menu.offsetHeight > window.innerHeight) {
+                top = rect.top - menu.offsetHeight - 6;
+            }
+            const left = Math.max(8, Math.min(rect.left, window.innerWidth - menu.offsetWidth - 8));
+            menu.style.top = top + "px";
+            menu.style.left = left + "px";
+        }
+ 
+        document.addEventListener("click", closeMenu);
+ 
+        /* ---------- "create playlist" popup ---------- */
+        function openModal(song) {
+            pendingSong = song;
+            $("playlistName").value = "";
+            $("modal").hidden = false;
+            $("playlistName").focus();
+        }
+ 
+        function closeModal() {
+            $("modal").hidden = true;
+            pendingSong = null;
+        }
+ 
+        function submitModal() {
+            const name = $("playlistName").value.trim();
+            if (name === "") { return; }
+            const playlist = createPlaylist(name);
+            if (pendingSong) {
+                addToPlaylist(playlist.id, pendingSong);
+            } else {
+                toast("Playlist created");
+            }
+            closeModal();
+        }
+ 
+        $("createBtn").addEventListener("click", submitModal);
+        $("cancelBtn").addEventListener("click", closeModal);
+        $("playlistName").addEventListener("keydown", function (e) {
+            if (e.key === "Enter") { submitModal(); }
+            if (e.key === "Escape") { closeModal(); }
+        });
+ 
+        /* ---------- small message at the bottom ---------- */
+        let toastTimer;
+        function toast(text) {
+            const box = $("toast");
+            box.textContent = text;
+            box.hidden = false;
+            clearTimeout(toastTimer);
+            toastTimer = setTimeout(function () { box.hidden = true; }, 2000);
+        }
+ 
+        /* ---------- sidebar links and buttons ---------- */
+        $("navHome").addEventListener("click", function (e) { e.preventDefault(); goHome(); });
+        $("navSearch").addEventListener("click", function (e) {
+            e.preventDefault(); goHome(); $("search").focus();
+        });
+        $("navLibrary").addEventListener("click", function (e) {
+            e.preventDefault(); goHome(); $("librarySection").scrollIntoView();
+        });
+        $("navCreate").addEventListener("click", function (e) { e.preventDefault(); openModal(null); });
+        $("navLiked").addEventListener("click", function (e) { e.preventDefault(); openView("liked"); });
+ 
+        $("backBtn").addEventListener("click", goHome);
+        $("deleteBtn").addEventListener("click", function () { deletePlaylist(currentView); });
+ 
+        /* ---------- search ---------- */
+        $("search").addEventListener("change", function () {
+            const text = $("search").value.trim();
+            goHome();
+            if (text === "") {
+                $("chartsTitle").textContent = "Top Charts";
+                loadSongs("top hits");
+            } else {
+                $("chartsTitle").textContent = "Results for \"" + text + "\"";
+                loadSongs(text);
+            }
+        });
+ 
+        /* ---------- start ---------- */
+        renderSidebar();
+        renderLibrary();
+        loadSongs("top hits");
+    </script>
+</body>
+</html>
+ 
+
+
+
+
+
+
+
+
+
+
